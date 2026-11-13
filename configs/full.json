@@ -1,8 +1,8 @@
 {
   "run_type": "full_research",
-  "notes": "Declared before any full-data result was seen. Changes vs the Codex draft, all compute-driven: threads 2 -> 8; random forest max_samples=0.1 (each tree bootstraps 10% of rows; full-sample trees were timed at ~10 h for four fits); run on an NVIDIA V100S: XGBoost device=cuda, LSTM on GPU with batch_size 256 (was 64).",
+  "notes": "Declared before any full-data result was seen; all changes vs the Codex draft are compute-driven. threads 2 -> 14 (dedicated OVH l40s-90: 15 vCPU, 86 GB RAM, NVIDIA L40S 48 GB); random forest max_samples=0.1 (each tree bootstraps 10% of rows; full-sample trees were timed at ~10 h for four fits); XGBoost device=cuda; LSTM on GPU with batch_size 256 (was 64). Thread count does not change results.",
   "seed": 42,
-  "threads": 8,
+  "threads": 14,
   "subset": {},
   "split": {
     "holdout_days": 20,
