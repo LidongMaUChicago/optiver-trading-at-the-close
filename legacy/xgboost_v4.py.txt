@@ -1,0 +1,350 @@
+# Historical notebook code export, not the rebuilt pipeline
+# Original code retained without execution or corrections
+# %%
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python Docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load
+
+import numpy as np  # linear algebra
+import pandas as pd  # data processing, CSV file I/O (e.g. pd.read_csv)
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.model_selection import train_test_split
+from xgboost import XGBRegressor
+from joblib import dump
+import gc
+import time
+import warnings
+from tensorflow.keras.callbacks import EarlyStopping
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+import os
+
+# Input data files are available in the read-only "../input/" directory
+# For example, running this (by clicking run or pressing Shift+Enter) will list all files under the input directory
+
+import os
+for dirname, _, filenames in os.walk('/kaggle/input'):
+    for filename in filenames:
+        print(os.path.join(dirname, filename))
+
+# You can write up to 20GB to the current directory (/kaggle/working/) that gets preserved as output when you create a version using "Save & Run All" 
+# You can also write temporary files to /kaggle/temp/, but they won't be saved outside of the current session
+
+# %%
+def reduce_mem_usage(df, verbose=True):
+    start_mem = df.memory_usage().sum() / 1024**2
+    for col in df.columns:
+        col_type = df[col].dtype
+        if col_type != object:
+            c_min = df[col].min()
+            c_max = df[col].max()
+            if str(col_type)[:3] == 'int':
+                if c_min > np.iinfo(np.int8).min and c_max < np.iinfo(np.int8).max:
+                    df[col] = df[col].astype(np.int8)
+                elif c_min > np.iinfo(np.int16).min and c_max < np.iinfo(np.int16).max:
+                    df[col] = df[col].astype(np.int16)
+                elif c_min > np.iinfo(np.int32).min and c_max < np.iinfo(np.int32).max:
+                    df[col] = df[col].astype(np.int32)
+            else:
+                if c_min > np.finfo(np.float16).min and c_max < np.finfo(np.float16).max:
+                    df[col] = df[col].astype(np.float16)
+                elif c_min > np.finfo(np.float32).min and c_max < np.finfo(np.float32).max:
+                    df[col] = df[col].astype(np.float32)
+    end_mem = df.memory_usage().sum() / 1024**2
+    if verbose:
+        print('Memory usage before optimization is: {:.2f} MB'.format(start_mem))
+        print('Memory usage after optimization is: {:.2f} MB'.format(end_mem))
+        print('Decreased by {:.1f}%'.format(100 * (start_mem - end_mem) / start_mem))
+    return df
+
+# %%
+# Load the dataset
+train_original = pd.read_csv('/kaggle/input/optiver-trading-at-the-close/train.csv')
+train_original = reduce_mem_usage(train_original)
+
+# %%
+# copy the original data
+train = train_original.iloc[:-33000].copy()
+train = reduce_mem_usage(train)
+
+# Remove rows with missing target values
+train.dropna(subset = ['imbalance_size'], inplace = True)
+
+# %%
+# main part starting from here
+
+# %%
+# feature engineering
+
+def feature_engineering(df, buffer_df=None):
+    # Sort values
+    df.sort_values(by=['date_id', 'seconds_in_bucket'], inplace=True)
+    
+    # Original features
+    features = ['imbalance_size', 'reference_price', 'matched_size', 
+                'bid_price', 'bid_size', 'ask_price', 'ask_size', 'wap']
+
+    # Instantaneous Features
+    df['bid_ask_spread'] = df['ask_price'] - df['bid_price']
+    df['order_imbalance'] = df['bid_size'] - df['ask_size']
+    df['volume_imbalance_ratio'] = (df['bid_size'] - df['ask_size']) / (df['bid_size'] + df['ask_size'])
+    df['market_depth'] = df['bid_size'] + df['ask_size']
+
+    # Update features list
+    features += ['bid_ask_spread', 'order_imbalance', 'volume_imbalance_ratio', 'market_depth']
+
+    # Number of lags
+    n_lags = 3
+
+    lag_columns = ['wap', 'reference_price', 'matched_size', 'bid_size', 'ask_size', 
+                   'bid_ask_spread', 'order_imbalance', 'volume_imbalance_ratio', 'market_depth']
+
+    # Use buffer if provided, for test data
+    if buffer_df is not None:
+        combined_df = pd.concat([buffer_df, df])
+        for col in lag_columns:
+            for lag in range(1, n_lags + 1):
+                combined_df[f'{col}_lag_{lag}'] = combined_df[col].shift(lag)
+        df = combined_df[-len(df):]
+    else:
+        for col in lag_columns:
+            for lag in range(1, n_lags + 1):
+                df[f'{col}_lag_{lag}'] = df[col].shift(lag)
+
+    # Check if the DataFrame is likely the first chunk
+    is_first_chunk = df[f'{lag_columns[0]}_lag_{n_lags}'].isna().any()
+    
+    # Handling NaN values
+    if is_first_chunk:
+        # Special handling for the first chunk
+        df.fillna(df.median(), inplace=True)
+    else:
+        # Forward fill NaN values created by lag features
+        df.fillna(method='ffill', inplace=True)
+
+    # Update features list to include lag features
+    for col in lag_columns:
+        features += [f'{col}_lag_{lag}' for lag in range(1, n_lags + 1)]
+
+    return df, features
+
+# %%
+# Modefy train data
+# apply feature engineering to train data
+train, features = feature_engineering(train)
+
+# Check correlation
+corr_matrix = train[features].corr()
+plt.figure(figsize=(12, 10))
+sns.heatmap(corr_matrix, annot=True, cmap='coolwarm')
+plt.title('Feature Correlation Matrix')
+plt.show()
+
+# Handle missing values
+train.fillna(train.median(), inplace=True)
+
+# Assuming 'target' is your target variable
+y = train['target']
+X = train[features]  # 'features' should be a list of column names used as features
+
+# %%
+# build model
+
+def train_xgboost_model(X_train, y_train, X_val=None, y_val=None):
+   
+    # Initialize and train the XGBoost model
+    model = XGBRegressor(n_estimators=100, max_depth=3, learning_rate=0.1, random_state=42)
+    
+    # Use a simpler XGBoost model setup 
+#     model = XGBRegressor(n_estimators=50, max_depth=3, learning_rate=0.1, random_state=42)
+
+    # If validation data is provided, use early stopping
+    if X_val is not None and y_val is not None:
+        model.fit(X_train, y_train, eval_set=[(X_val, y_val)], verbose=False)
+    else:
+        model.fit(X_train, y_train, verbose=False)
+
+    # Predict on training set
+    y_train_pred = model.predict(X_train)
+
+    # Calculate MAE and R² metrics for the training set
+    train_mae = mean_absolute_error(y_train, y_train_pred)
+    train_r2 = r2_score(y_train, y_train_pred)
+    print("Train MAE:", train_mae, "Train R²:", train_r2)
+    
+    # If validation data is provided, evaluate model on it
+    if X_val is not None and y_val is not None:
+        y_val_pred = model.predict(X_val)
+        val_mae = mean_absolute_error(y_val, y_val_pred)
+        val_r2 = r2_score(y_val, y_val_pred)
+        print("Validation MAE:", val_mae, "Validation R²:", val_r2)
+
+    # Feature Importance Analysis
+    print("\nFeature Importances:")
+    feature_importances = model.feature_importances_
+    for feature_name, importance in zip(X_train.columns, feature_importances):
+        print(f"{feature_name}: {importance}")
+
+    return model
+
+# %%
+def xgb_cross_validation(df, features, n_splits=5):
+    total_mae_score = 0
+    total_r2_score = 0
+
+    # Determine the range of date_id and split it
+    date_ids = df['date_id'].unique()
+    split_size = len(date_ids) // n_splits
+
+    for i in range(n_splits):
+        # Define the split for the current fold
+        val_start = i * split_size
+        val_end = val_start + split_size
+        val_date_ids = date_ids[val_start:val_end]
+
+        # Split the data
+        train_split = df[~df['date_id'].isin(val_date_ids)]
+        val_split = df[df['date_id'].isin(val_date_ids)]
+
+        X_train = train_split[features]
+        y_train = train_split['target']
+        X_val = val_split[features]
+        y_val = val_split['target']
+
+        # Train XGBoost model
+        model = XGBRegressor(n_estimators=100, learning_rate=0.1, max_depth=3, random_state=42)
+        
+        # Use a simpler XGBoost model setup inside the loop
+#         model = XGBRegressor(n_estimators=50, learning_rate=0.1, max_depth=3, random_state=42)
+    
+        model.fit(X_train, y_train, eval_set=[(X_val, y_val)], verbose=False)
+
+        # Evaluate the model
+        y_val_pred = model.predict(X_val)
+        mae = mean_absolute_error(y_val, y_val_pred)
+        r2 = r2_score(y_val, y_val_pred)
+        print(f"Fold {i+1}, Validation MAE: {mae}, Validation R²: {r2}")
+        total_mae_score += mae
+        total_r2_score += r2
+
+    average_mae = total_mae_score / n_splits
+    average_r2 = total_r2_score / n_splits
+    print(f"Average MAE over {n_splits} folds: {average_mae}")
+    print(f"Average R² over {n_splits} folds: {average_r2}")
+
+# %%
+# Run the cross-validation
+xgb_cross_validation(train, features, n_splits=5)
+
+# Using a subset of data for quick testing
+# subset_train = train.sample(frac=0.1)  # Adjust fraction as needed
+# xgb_cross_validation(train, features, n_splits=2)
+
+# %%
+# After cross-validation is done, Train the final model on the entire dataset
+model = train_xgboost_model(X, y)
+
+# Training final model on a subset for quick testing
+# X_sub = subset_train[features]
+# y_sub = subset_train['target']
+# model = train_xgboost_model(X_sub, y_sub)
+
+# %%
+# Save the trained model
+model_filename = '/kaggle/working/XGBoost_model.joblib'
+dump(model, model_filename)
+print(f"Model saved to {model_filename}")
+
+# When you need to make predictions later, you can load the model
+# model = load(model_filename)
+# predictions = model.predict(X_test)
+
+# %%
+# prediction funcion for test set
+
+# Define the buffer size (set this based on your maximum look-back period)
+buffer_size = 10  # Example size, adjust as needed
+
+# Initialize an empty DataFrame to hold the buffer
+buffer_df = pd.DataFrame()
+
+def prediction(test, model, features, buffer_df):
+    # Combine the buffer with the new chunk of test data
+    combined_data = pd.concat([buffer_df, test])
+
+    # Apply feature engineering to the combined data
+    combined_data, _ = feature_engineering(combined_data)
+
+    # Fill any remaining NaN values after feature engineering
+    combined_data.fillna(combined_data.median(), inplace=True)
+
+    # Extract the feature matrix for the test data
+    X_test = combined_data[features][-len(test):]
+
+    # Make predictions using the XGBoost model
+    y_predict = model.predict(X_test)
+
+    # Update the buffer with the last 'buffer_size' rows of the combined data
+    new_buffer_df = combined_data[-buffer_size:]
+
+    return y_predict, new_buffer_df
+
+# %%
+import optiver2023
+env = optiver2023.make_env()
+iter_test = env.iter_test()
+
+# %%
+# test_tot.isnull().sum()
+
+# %%
+counter = 0
+
+for (test, revealed_targets, sample_prediction) in iter_test:
+    
+    if test.currently_scored.iloc[0]== False:
+        sample_prediction['target'] = 0
+        env.predict(sample_prediction)
+        counter += 1
+        continue
+    
+    print(len(test[test['currently_scored'] == True]))
+    print(len(revealed_targets))
+    print(revealed_targets.head(3))
+    print(len(sample_prediction))
+
+    predictions, buffer_df = prediction(test, model, features, buffer_df)
+    sample_prediction['target'] = predictions
+    print(sample_prediction)
+    print(counter)
+    env.predict(sample_prediction)
+    counter += 1
+
+# %%
+sub = pd.read_csv('submission.csv')
+# The publicly-seen test blocks are not scored and return value of 0. 
+# The hidden test block will be run to provide the LB score
+print(sub)
+print(len(sub[sub['target'] == 0]))
+
+# %%
+# counter = 0
+
+# for (test, revealed_targets, sample_prediction) in iter_test:
+# #     print(counter)
+# #     print(test)
+#     sample_prediction['target'] = 0
+#     env.predict(sample_prediction)
+#     predictions, buffer_df, test1 = prediction(test, model, features, buffer_df)
+#     sample_prediction['target'] = predictions
+# #     test, x = prediction(test, revealed_targets, sample_prediction)
+#     if counter == 0:
+#         test_tot = test1.copy()
+# #         x_tot = x.copy()
+#     else:
+#         test_tot = pd.concat([test_tot, test1], ignore_index=True)
+# #         x_tot = pd.concat([x_tot, x], ignore_index=True)
+
+#     counter += 1
+# print(test_tot)
+# # print(x_tot)

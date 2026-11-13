@@ -1,0 +1,52 @@
+{
+  "date": "2026-11-13",
+  "unit_tests": {
+    "passed": 15,
+    "failed": 0,
+    "python": "3.11.15"
+  },
+  "real_data_quick_workflow": {
+    "completed": true,
+    "config": "configs/quick.json",
+    "models": [
+      "ridge",
+      "random_forest",
+      "xgboost",
+      "lstm"
+    ],
+    "neural_only_check": "configs/neural_check.json completed (exit 0)",
+    "model_reload": "passed",
+    "stream_vs_batch_max_abs_diff": {
+      "xgboost": 5.96e-08,
+      "lstm": 3.21e-08
+    },
+    "note": "small 8-stock / 20-day functional check, not a benchmark"
+  },
+  "fixed_issues": [
+    {
+      "issue": "LSTM SIGSEGV in torch AdamW.step on real data",
+      "cause": "competing libomp runtimes (Homebrew via xgboost, sklearn, torch); xgboost's initialised first",
+      "fix": "import torch first in optiver_close/__init__.py; regression test tests/test_import_order.py"
+    },
+    {
+      "issue": "selection.json failed to serialise numpy int64 fold days",
+      "fix": "numpy-aware JSON default in experiment.save_json"
+    },
+    {
+      "issue": "Ridge matmul RuntimeWarnings",
+      "cause": "spurious macOS Accelerate warnings; inputs finite, result matches long-double recomputation to 1e-14",
+      "fix": "none needed"
+    }
+  ],
+  "packages": {
+    "numpy": "2.2.6",
+    "pandas": "2.3.3",
+    "scikit-learn": "1.7.2",
+    "xgboost": "3.0.5",
+    "torch": "2.8.0"
+  },
+  "full_research_run": {
+    "completed": false,
+    "config": "configs/full.json"
+  }
+}

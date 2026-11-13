@@ -1,0 +1,87 @@
+{
+  "run_type": "small_sample_functional_check",
+  "winner": "xgboost",
+  "development": {
+    "lstm": {
+      "mae": 5.604586639297618,
+      "rmse": 8.099134702116928,
+      "r2": -0.0011581741481325736,
+      "rows": 2640
+    },
+    "random_forest": {
+      "mae": 5.59408826939445,
+      "rmse": 8.100734925380282,
+      "r2": -0.001553829962802844,
+      "rows": 2640
+    },
+    "ridge": {
+      "mae": 5.644144401256016,
+      "rmse": 8.073533831069215,
+      "r2": 0.005161022654547209,
+      "rows": 2640
+    },
+    "xgboost": {
+      "mae": 5.5706722873019645,
+      "rmse": 8.075225920083405,
+      "r2": 0.004743972935673857,
+      "rows": 2640
+    }
+  },
+  "holdout": {
+    "mae": 4.495100536200246,
+    "rmse": 6.021111129398985,
+    "r2": 0.023230075739058775,
+    "rows": 1320
+  },
+  "zero_baseline_holdout": {
+    "mae": 4.536113953590393,
+    "rmse": 6.0935711322348975,
+    "r2": -0.00042091662271026564,
+    "rows": 1320
+  },
+  "holdout_days": [
+    478,
+    479,
+    480
+  ],
+  "holdout_by_day": [
+    {
+      "date_id": 478,
+      "mae": 5.242117997203869,
+      "rmse": 7.00675828071542,
+      "r2": -0.01410171913140501,
+      "rows": 440
+    },
+    {
+      "date_id": 479,
+      "mae": 4.2382838747718115,
+      "rmse": 5.559664062838783,
+      "r2": 0.03788093888047794,
+      "rows": 440
+    },
+    {
+      "date_id": 480,
+      "mae": 4.004899736625058,
+      "rmse": 5.3625377948991515,
+      "r2": 0.033056022896896464,
+      "rows": 440
+    }
+  ],
+  "paired_daily_bootstrap": {
+    "meaning": "MAE(zero) minus MAE(model), basis points",
+    "daily_resampling_95pct_interval": [
+      -0.004783843334933573,
+      0.06901405867273834
+    ],
+    "days": 3,
+    "draws": 2000
+  },
+  "total_seconds": 4.452437500003725,
+  "historical_result": {
+    "public_mae_rounded": 4.7,
+    "public_mae_exact": 4.7191,
+    "date": "2024-01-16",
+    "model": "original XGBoost v4",
+    "new_run_result": false
+  }
+}

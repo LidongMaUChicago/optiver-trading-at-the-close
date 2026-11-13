@@ -1,0 +1,14 @@
+{
+  "run_type": "small_sample_functional_check",
+  "seed": 42,
+  "threads": 2,
+  "subset": {"last_days": 20, "stocks": [0, 1, 2, 3, 4, 5, 6, 7]},
+  "split": {"holdout_days": 3, "validation_days": 3, "folds": 2, "gap_days": 1, "min_train_days": 4},
+  "models": [
+    {"name": "ridge", "params": {"alpha": 100}},
+    {"name": "random_forest", "params": {"n_estimators": 10, "max_depth": 5, "min_samples_leaf": 10}},
+    {"name": "xgboost", "params": {"n_estimators": 15, "max_depth": 3}},
+    {"name": "lstm", "params": {"epochs": 1, "hidden": 8, "embedding_dim": 2, "batch_size": 64, "sequence_length": 6}}
+  ]
+}
+

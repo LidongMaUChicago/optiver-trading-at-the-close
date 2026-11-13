@@ -1,0 +1,484 @@
+# Historical notebook code export, not the rebuilt pipeline
+# Original code retained without execution or corrections
+# %%
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python Docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load
+
+import numpy as np  # linear algebra
+import pandas as pd  # data processing, CSV file I/O (e.g. pd.read_csv)
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from xgboost import XGBRegressor
+from joblib import dump
+import gc
+import time
+import warnings
+from tensorflow.keras.callbacks import EarlyStopping
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Embedding, Flatten, Dense
+from tensorflow.keras.utils import to_categorical
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+import os
+
+# Input data files are available in the read-only "../input/" directory
+# For example, running this (by clicking run or pressing Shift+Enter) will list all files under the input directory
+
+import os
+for dirname, _, filenames in os.walk('/kaggle/input'):
+    for filename in filenames:
+        print(os.path.join(dirname, filename))
+
+# You can write up to 20GB to the current directory (/kaggle/working/) that gets preserved as output when you create a version using "Save & Run All" 
+# You can also write temporary files to /kaggle/temp/, but they won't be saved outside of the current session
+
+# %%
+def reduce_mem_usage(df, verbose=True):
+    start_mem = df.memory_usage().sum() / 1024**2
+    for col in df.columns:
+        col_type = df[col].dtype
+        if col_type != object:
+            c_min = df[col].min()
+            c_max = df[col].max()
+            if str(col_type)[:3] == 'int':
+                if c_min > np.iinfo(np.int8).min and c_max < np.iinfo(np.int8).max:
+                    df[col] = df[col].astype(np.int8)
+                elif c_min > np.iinfo(np.int16).min and c_max < np.iinfo(np.int16).max:
+                    df[col] = df[col].astype(np.int16)
+                elif c_min > np.iinfo(np.int32).min and c_max < np.iinfo(np.int32).max:
+                    df[col] = df[col].astype(np.int32)
+            else:
+                if c_min > np.finfo(np.float16).min and c_max < np.finfo(np.float16).max:
+                    df[col] = df[col].astype(np.float16)
+                elif c_min > np.finfo(np.float32).min and c_max < np.finfo(np.float32).max:
+                    df[col] = df[col].astype(np.float32)
+    end_mem = df.memory_usage().sum() / 1024**2
+    if verbose:
+        print('Memory usage before optimization is: {:.2f} MB'.format(start_mem))
+        print('Memory usage after optimization is: {:.2f} MB'.format(end_mem))
+        print('Decreased by {:.1f}%'.format(100 * (start_mem - end_mem) / start_mem))
+    return df
+
+# %%
+# Load the dataset
+train_original = pd.read_csv('/kaggle/input/optiver-trading-at-the-close/train.csv')
+train_original = reduce_mem_usage(train_original)
+test = pd.read_csv('/kaggle/input/optiver-trading-at-the-close/example_test_files/test.csv')
+revealed_targets = pd.read_csv('/kaggle/input/optiver-trading-at-the-close/example_test_files/revealed_targets.csv')
+sample_prediction = pd.read_csv('/kaggle/input/optiver-trading-at-the-close/example_test_files/sample_submission.csv')
+test_y = train_original.iloc[-33000:][['time_id','stock_id','target']].reset_index(drop = True)
+
+# %%
+# copy the original data
+train = train_original.iloc[:-33000].copy()
+train = reduce_mem_usage(train)
+
+# Remove rows with missing target values
+train.dropna(subset = ['imbalance_size'], inplace = True)
+
+# %%
+# main part starting from here
+
+# %%
+# # Use a simple neural network with an embedding layer to learn representations (embeddings) for each stock_id
+# # Train an Embedding Neural Network
+# def train_embedding_network(df, target_column=None, embedding_dim=3):
+#     """
+#     Trains an embedding neural network using stock_id and target from the provided DataFrame.
+    
+#     Args:
+#     df (DataFrame): The DataFrame containing the stock_id and possibly the target.
+#     target_column (str, optional): The name of the target column in the DataFrame. 
+#                                    If None, the function assumes it's dealing with test data.
+#     embedding_dim (int): Dimension of the embedding vector.
+
+#     Returns:
+#     model (Sequential): Trained Keras Sequential model with embedding layer.
+#     num_stocks (int): Number of unique stocks.
+#     """
+#     num_stocks = len(df['stock_id'].unique())
+#     X_embedding = np.array(df['stock_id'])
+
+#     # For training data, prepare target; for test data, create a dummy target array
+#     y_embedding = np.array(df[target_column]) if target_column else np.zeros(len(df))
+
+#     model = Sequential()
+#     model.add(Embedding(input_dim=num_stocks + 1, output_dim=embedding_dim, input_length=1))
+#     model.add(Flatten())
+#     model.add(Dense(10, activation='relu'))
+    
+#     if target_column:  # Only add output layer for training data
+#         model.add(Dense(1))  # Regression problem
+
+#     model.compile(optimizer='adam', loss='mean_squared_error')
+    
+#     if target_column:  # Only fit the model for training data
+#         model.fit(X_embedding, y_embedding, epochs=3, batch_size=32)
+
+#     return model, num_stocks
+
+# def add_embeddings_to_dataframe(df, embedding_model):
+#     # Extract embeddings from the trained model
+#     embeddings = embedding_model.layers[0].get_weights()[0]
+
+#     # Create a DataFrame for the embeddings
+#     embedding_cols = [f'embedding_{i}' for i in range(embeddings.shape[1])]
+#     embedding_df = pd.DataFrame(embeddings, columns=embedding_cols)
+
+#     # Create a 'stock_id' column in embedding_df
+#     embedding_df['stock_id'] = range(embeddings.shape[0])
+
+#     # Merge the original DataFrame with the embedding DataFrame
+#     merged_df = df.merge(embedding_df, on='stock_id', how='left')
+
+#     return merged_df
+
+# # train the embedding model
+# embedding_model, num_stocks = train_embedding_network(train, 'target')
+
+# %%
+# Apply embeddings to train data
+# train = add_embeddings_to_dataframe(train, embedding_model)
+
+# %%
+def feature_engineering(df):
+    # Sort values (first sorting)
+    df.sort_values(by=['stock_id', 'date_id', 'seconds_in_bucket'], inplace=True)
+    
+    # Original features
+    
+#     features = ['imbalance_size', 'reference_price', 'matched_size', 
+#                 'bid_price', 'bid_size', 'ask_price', 'ask_size', 'wap']
+    
+    features = [ 'matched_size', 'bid_size', 'wap']
+
+    # Instantaneous Features
+    df['bid_ask_spread'] = df['ask_price'] - df['bid_price']
+    df['order_imbalance'] = df['bid_size'] - df['ask_size']
+    df['order_imbalance_2'] = df['imbalance_size'] * df['imbalance_buy_sell_flag']
+    df['volume_imbalance_ratio'] = (df['bid_size'] - df['ask_size']) / (df['bid_size'] + df['ask_size'])
+    df['market_depth'] = df['bid_size'] + df['ask_size']
+
+    # Update features list
+    features += ['bid_ask_spread', 'order_imbalance', 'order_imbalance_2', 'volume_imbalance_ratio', 'market_depth']
+
+    # Number of lags
+    n_lags = 1
+
+    lag_columns = ['wap', 'matched_size', 
+                   'bid_ask_spread', 'order_imbalance_2']
+    
+    # Lag feature calculation 
+#     if buffer_df is not None:
+# #         combined_df = pd.concat([buffer_df, df])
+#         for col in lag_columns:
+#             for lag in range(1, n_lags + 1):
+#                 buffer_df[f'{col}_lag_{lag}'] = buffer_df[col].shift(lag)
+#         df = buffer_df[-len(df):]
+#     else:
+    for col in lag_columns:
+        for lag in range(1, n_lags + 1):
+            df[f'{col}_lag_{lag}'] = df[col].shift(lag)
+                
+
+
+    # Handling NaN values
+    df.fillna(df.median(), inplace=True)
+
+    # Update features list to include lag features
+    for col in lag_columns:
+        features += [f'{col}_lag_{lag}' for lag in range(1, n_lags + 1)]
+        
+    n_lags = 1
+    rolling_window = 5
+
+    lag_columns = ['wap', 'matched_size', 'order_imbalance_2', 'bid_ask_spread']
+    
+    df.sort_values(by=['time_id', 'stock_id'], inplace=True)
+    
+    # Calculating rolling mean and std on the combined data
+    for col in lag_columns:
+        df[f'{col}_rolling_mean'] = df[col].rolling(window=rolling_window, min_periods=1).mean()
+        df[f'{col}_rolling_std'] = df[col].rolling(window=rolling_window, min_periods=1).std()
+
+    # Handling NaN values for rolling calculations
+    df.fillna(df.median(), inplace=True)
+
+    # Add rolling features to the features list
+    for col in lag_columns:
+        features.append(f'{col}_rolling_mean')
+        features.append(f'{col}_rolling_std')
+
+
+    df.sort_values(by = ['time_id', 'stock_id'], inplace = True)
+    
+
+    return df, features
+
+# %%
+# Modify train data
+# apply feature engineering to train data
+train, features = feature_engineering(train)
+
+# Check correlation
+corr_matrix = train[features].corr()
+plt.figure(figsize=(12, 10))
+sns.heatmap(corr_matrix, annot=True, cmap='coolwarm')
+plt.title('Feature Correlation Matrix')
+plt.show()
+
+
+
+# %%
+features
+
+# %%
+pd.set_option('display.max_rows', 100)
+numeric_df = train.select_dtypes(include=[np.number])
+
+# Check for infinite values in numeric columns
+has_infinite = np.isinf(numeric_df).any()
+has_na = train.isna().sum()
+
+print(has_infinite,'\n', has_na)
+
+# %%
+# Assuming 'target' is your target variable
+y = train['target']
+X = train[features]  # 'features' should be a list of column names used as features
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X)
+
+# %%
+# build model
+
+def train_xgboost_model(X_train, y_train, X_val=None, y_val=None):
+   
+    # Initialize and train the XGBoost model
+    model = XGBRegressor(n_estimators=100, max_depth=5, learning_rate=0.1, colsample_bytree=1, gamma=0.1, reg_lambda=1, reg_alpha=0.1, subsample=0.8,random_state=42)
+    
+    # Use a simpler XGBoost model setup 
+#     model = XGBRegressor(n_estimators=50, max_depth=3, learning_rate=0.1, random_state=42)
+
+    # If validation data is provided, use early stopping
+    if X_val is not None and y_val is not None:
+        model.fit(X_train, y_train, eval_set=[(X_val, y_val)], verbose=False)
+    else:
+        model.fit(X_train, y_train, verbose=False)
+
+    # Predict on training set
+    y_train_pred = model.predict(X_train)
+
+    # Calculate MAE and R² metrics for the training set
+    train_mae = mean_absolute_error(y_train, y_train_pred)
+    train_r2 = r2_score(y_train, y_train_pred)
+    print("Train MAE:", train_mae, "Train R²:", train_r2)
+    
+    # If validation data is provided, evaluate model on it
+    if X_val is not None and y_val is not None:
+        y_val_pred = model.predict(X_val)
+        val_mae = mean_absolute_error(y_val, y_val_pred)
+        val_r2 = r2_score(y_val, y_val_pred)
+        print("Validation MAE:", val_mae, "Validation R²:", val_r2)
+
+    # Feature Importance Analysis
+    print("\nFeature Importances:")
+    feature_importances = model.feature_importances_
+    for feature_name, importance in zip(X_train.columns, feature_importances):
+        print(f"{feature_name}: {importance}")
+
+    return model
+
+# %%
+def xgb_cross_validation(df, features, n_splits=5):
+    total_mae_score = 0
+    total_r2_score = 0
+
+    # Determine the range of date_id and split it
+    date_ids = df['date_id'].unique()
+    split_size = len(date_ids) // n_splits
+
+    for i in range(n_splits):
+        # Define the split for the current fold
+        val_start = i * split_size
+        val_end = val_start + split_size
+        val_date_ids = date_ids[val_start:val_end]
+
+        # Split the data
+        train_split = df[~df['date_id'].isin(val_date_ids)]
+        val_split = df[df['date_id'].isin(val_date_ids)]
+
+        X_train = train_split[features]
+        y_train = train_split['target']
+        X_val = val_split[features]
+        y_val = val_split['target']
+
+        # Train XGBoost model
+        model = XGBRegressor(n_estimators=100, max_depth=5, learning_rate=0.1, colsample_bytree=1, gamma=0.1, reg_lambda=1, reg_alpha=0.1, subsample=0.8,random_state=42)
+        
+        # Use a simpler XGBoost model setup inside the loop
+#         model = XGBRegressor(n_estimators=50, learning_rate=0.1, max_depth=3, random_state=42)
+    
+        model.fit(X_train, y_train, eval_set=[(X_val, y_val)], verbose=False)
+
+        # Evaluate the model
+        y_val_pred = model.predict(X_val)
+        mae = mean_absolute_error(y_val, y_val_pred)
+        r2 = r2_score(y_val, y_val_pred)
+        print(f"Fold {i+1}, Validation MAE: {mae}, Validation R²: {r2}")
+        total_mae_score += mae
+        total_r2_score += r2
+
+    average_mae = total_mae_score / n_splits
+    average_r2 = total_r2_score / n_splits
+    print(f"Average MAE over {n_splits} folds: {average_mae}")
+    print(f"Average R² over {n_splits} folds: {average_r2}")
+
+# %%
+# Run the cross-validation
+subset_train = train
+xgb_cross_validation(subset_train, features, n_splits=3)
+
+# Using a subset of data for quick testing
+# subset_train = train.sample(frac=0.1)  # Adjust fraction as needed
+# xgb_cross_validation(train, features, n_splits=2)
+
+# After cross-validation is done, Train the final model on the entire dataset
+model = train_xgboost_model(X, y)
+
+# Training final model on a subset for quick testing
+# X_sub = subset_train[features]
+# y_sub = subset_train['target']
+# model = train_xgboost_model(X_sub, y_sub)
+
+# Save the trained model
+model_filename = '/kaggle/working/XGBoost_2.joblib'
+dump(model, model_filename)
+print(f"Model saved to {model_filename}")
+
+# When you need to make predictions later, you can load the model
+# model = load(model_filename)
+# predictions = model.predict(X_test)
+
+# %%
+# prediction funcion for test set
+
+# Define the buffer size (set this based on your maximum look-back period)
+buffer_size = 1000  # Example size, adjust as needed
+
+# Initialize an empty DataFrame to hold the buffer
+buffer_df = pd.DataFrame()
+
+def prediction(test, model, features, buffer_df):
+    # Apply embeddings to test data
+#     test = add_embeddings_to_dataframe(test, embedding_model)
+    
+    # Combine the buffer with the new chunk of test data
+    combined_data = pd.concat([buffer_df, test], ignore_index= True)
+
+    # Apply feature engineering to the combined data
+    combined_feature, _ = feature_engineering(combined_data)
+
+    # Fill any remaining NaN values after feature engineering
+    combined_feature.fillna(combined_feature.median(), inplace=True)
+
+    # Extract the feature matrix for the test data
+    X_test = combined_feature[features][-len(test):]
+#     X_test_scaled = scaler.transform(X_test)
+
+    # Make predictions using the XGBoost model
+    y_predict = model.predict(X_test)
+
+    # Update the buffer with the last 'buffer_size' rows of the combined data
+    new_buffer_df = combined_data[-buffer_size:]
+
+    return y_predict, new_buffer_df, X_test
+
+# %%
+# Test by our test data before submit
+# First, sort the test data by date_id and seconds_in_bucket
+test = test.sort_values(by=['time_id', 'stock_id'])
+
+# Initialize the buffer DataFrame
+buffer_df = pd.DataFrame()
+
+# Initialize lists to store results
+all_predictions = []
+all_true_targets = []
+
+# Process the test data in chunks
+for time_id, group in test.groupby(['time_id']):
+    predictions, buffer_df, X_test = prediction(group, model, features, buffer_df)
+    all_predictions.extend(predictions)
+
+    # Extract the corresponding true targets for evaluation (if available)
+    true_targets_chunk = test_y[test_y['time_id']==time_id]
+    true_targets_chunk.sort_values(by=['stock_id'])
+    all_true_targets.extend(true_targets_chunk['target'].values)
+
+# Convert lists to arrays for evaluation
+all_predictions = np.array(all_predictions)
+all_true_targets = np.array(all_true_targets)
+
+# Calculate MAE and R2
+mae = mean_absolute_error(all_true_targets, all_predictions)
+r2 = r2_score(all_true_targets, all_predictions)
+print("MAE:", mae, "R²:", r2)
+
+# %%
+import optiver2023
+env = optiver2023.make_env()
+iter_test = env.iter_test()
+
+# %%
+# counter = 0
+
+# for (test, revealed_targets, sample_prediction) in iter_test:
+# #     print(counter)
+# #     print(test)
+#     sample_prediction['target'] = 0
+#     env.predict(sample_prediction)
+#     predictions, buffer_df, X_test = prediction(test, model, features, buffer_df)
+#     sample_prediction['target'] = predictions
+
+#     counter += 1
+# print(X_test)
+
+# %%
+# print(sample_prediction.isnull().sum())
+# print(X_test.isnull().sum())
+
+# %%
+counter = 0
+
+for (test, revealed_targets, sample_prediction) in iter_test:
+    
+    if test.currently_scored.iloc[0]== False:
+        sample_prediction['target'] = 0
+        env.predict(sample_prediction)
+        counter += 1
+        continue
+    
+    print(len(test[test['currently_scored'] == True]))
+    print(len(revealed_targets))
+    print(revealed_targets.head(3))
+    print(len(sample_prediction))
+
+    predictions, buffer_df, X_test = prediction(test, model, features, buffer_df)
+    sample_prediction['target'] = predictions
+    print(sample_prediction)
+    print(counter)
+    env.predict(sample_prediction)
+    counter += 1
+
+# %%
+sub = pd.read_csv('submission.csv')
+# The publicly-seen test blocks are not scored and return value of 0. 
+# The hidden test block will be run to provide the LB score
+print(sub)
+print(len(sub[sub['target'] == 0]))
+
+# %%
+

@@ -1,0 +1,480 @@
+# Historical notebook code export, not the rebuilt pipeline
+# Original code retained without execution or corrections
+# %%
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python Docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load
+
+import numpy as np  # linear algebra
+import pandas as pd  # data processing, CSV file I/O (e.g. pd.read_csv)
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.model_selection import train_test_split
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import LSTM, Dense
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.callbacks import EarlyStopping
+from joblib import dump
+import gc
+import time
+import warnings
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+import os
+
+# Input data files are available in the read-only "../input/" directory
+# For example, running this (by clicking run or pressing Shift+Enter) will list all files under the input directory
+
+import os
+for dirname, _, filenames in os.walk('/kaggle/input'):
+    for filename in filenames:
+        print(os.path.join(dirname, filename))
+
+# You can write up to 20GB to the current directory (/kaggle/working/) that gets preserved as output when you create a version using "Save & Run All" 
+# You can also write temporary files to /kaggle/temp/, but they won't be saved outside of the current session
+
+# %%
+def reduce_mem_usage(df, verbose=True):
+    start_mem = df.memory_usage().sum() / 1024**2
+    for col in df.columns:
+        col_type = df[col].dtype
+        if col_type != object:
+            c_min = df[col].min()
+            c_max = df[col].max()
+            if str(col_type)[:3] == 'int':
+                if c_min > np.iinfo(np.int8).min and c_max < np.iinfo(np.int8).max:
+                    df[col] = df[col].astype(np.int8)
+                elif c_min > np.iinfo(np.int16).min and c_max < np.iinfo(np.int16).max:
+                    df[col] = df[col].astype(np.int16)
+                elif c_min > np.iinfo(np.int32).min and c_max < np.iinfo(np.int32).max:
+                    df[col] = df[col].astype(np.int32)
+            else:
+                if c_min > np.finfo(np.float16).min and c_max < np.finfo(np.float16).max:
+                    df[col] = df[col].astype(np.float16)
+                elif c_min > np.finfo(np.float32).min and c_max < np.finfo(np.float32).max:
+                    df[col] = df[col].astype(np.float32)
+    end_mem = df.memory_usage().sum() / 1024**2
+    if verbose:
+        print('Memory usage before optimization is: {:.2f} MB'.format(start_mem))
+        print('Memory usage after optimization is: {:.2f} MB'.format(end_mem))
+        print('Decreased by {:.1f}%'.format(100 * (start_mem - end_mem) / start_mem))
+    return df
+
+# %%
+# Load the dataset
+train_original = pd.read_csv('/kaggle/input/optiver-trading-at-the-close/train.csv')
+train_original = reduce_mem_usage(train_original)
+test = pd.read_csv('/kaggle/input/optiver-trading-at-the-close/example_test_files/test.csv')
+revealed_targets = pd.read_csv('/kaggle/input/optiver-trading-at-the-close/example_test_files/revealed_targets.csv')
+sample_prediction = pd.read_csv('/kaggle/input/optiver-trading-at-the-close/example_test_files/sample_submission.csv')
+test_y = train_original.iloc[-33000:]['target'].reset_index(drop = True)
+
+# %%
+print(test)
+print(test.isnull().sum())
+
+# %%
+# copy the original data
+train = train_original.iloc[-60000:-33000].copy().reset_index(drop = True)
+train = reduce_mem_usage(train)
+
+# Remove rows with missing target values
+train.dropna(subset = ['imbalance_size'], inplace = True)
+
+# # Sample 10% of the data
+# train = sorted_train.sample(frac=0.1, random_state=1)  # random_state ensures reproducibility
+# train = train.sort_values(by=['stock_id', 'date_id', 'seconds_in_bucket'])
+
+# %%
+train
+
+# %%
+# main part starting from here
+
+# %%
+# feature engineering
+
+def check_all_nan_columns(df):
+    all_nan_columns = df.columns[df.isna().all()].tolist()
+#     if all_nan_columns:
+#         print(f"Columns with all NaN values: {all_nan_columns}")
+    return all_nan_columns
+
+def feature_engineering(df):
+    # Sort values
+    df.sort_values(by = ['date_id', 'seconds_in_bucket'], inplace = True)
+    
+    # Original features
+    features = ['imbalance_size', 'reference_price', 'matched_size', 
+                'bid_price', 'bid_size', 'ask_price', 'ask_size', 'wap']
+
+    # Instantaneous Features
+    df['bid_ask_spread'] = df['ask_price'] - df['bid_price']
+#     df['mid_price'] = (df['bid_price'] + df['ask_price']) / 2
+#     df['relative_spread'] = df['bid_ask_spread'] / df['mid_price']
+    df['order_imbalance'] = df['bid_size'] - df['ask_size']
+    df['volume_imbalance_ratio'] = (df['bid_size'] - df['ask_size']) / (df['bid_size'] + df['ask_size'])
+    df['market_depth'] = df['bid_size'] + df['ask_size']
+
+    # Handling NaN values
+    df.fillna(df.median(), inplace=True)
+
+    # Update features list
+    features += ['bid_ask_spread', 'order_imbalance', 'volume_imbalance_ratio', 'market_depth']
+    
+    check_all_nan_columns(df)
+
+    return df, features
+
+# %%
+# Modefy train data
+# apply feature engineering to train data
+train, features = feature_engineering(train)
+
+# Check correlation
+corr_matrix = train[features].corr()
+plt.figure(figsize=(12, 10))
+sns.heatmap(corr_matrix, annot=True, cmap='coolwarm')
+plt.title('Feature Correlation Matrix')
+plt.show()
+
+# Handle missing values
+train.fillna(train.median(), inplace=True)
+
+# Normalize the features
+scaler = MinMaxScaler(feature_range=(0, 1))
+train[features] = scaler.fit_transform(train[features])
+
+# %%
+# build model
+
+def train_lstm_model(X_train, y_train, X_val=None, y_val=None, batch_size=32, callbacks=None, quick_check=False):
+    
+    # Define the LSTM model
+    # Define the LSTM model
+    if quick_check:
+        # Use a simpler model for quick testing
+        model = Sequential()
+        model.add(LSTM(5, return_sequences=True, input_shape=(X_train.shape[1], X_train.shape[2])))
+        model.add(LSTM(5))
+        model.add(Dense(1))
+        learning_rate = 0.05  
+        epochs = 5
+    else:
+        model = Sequential()
+        model.add(LSTM(10, return_sequences=True, input_shape=(X_train.shape[1], X_train.shape[2])))
+        model.add(LSTM(10))
+        model.add(Dense(1))
+        learning_rate = 0.03
+        epochs = 5
+
+    model.compile(optimizer=Adam(learning_rate=learning_rate), loss='mean_squared_error')
+    
+    # Define EarlyStopping for both cases
+    early_stopping = EarlyStopping(monitor='val_loss', patience=3, restore_best_weights=True)
+    
+    # Train the model
+    if X_val is not None and y_val is not None:
+        model.fit(X_train, y_train, epochs=epochs, batch_size=batch_size, verbose=2, validation_data=(X_val, y_val), callbacks=[early_stopping] if quick_check else [early_stopping])
+    else:
+        model.fit(X_train, y_train, epochs=epochs, batch_size=batch_size, verbose=2, callbacks=[early_stopping] if quick_check else [early_stopping])
+
+    # Predict on training set and calculate performance metrics for the training set 
+    y_train_pred = model.predict(X_train).flatten()
+    train_mae = mean_absolute_error(y_train, y_train_pred)
+    train_r2 = r2_score(y_train, y_train_pred)
+    print("Train MAE:", train_mae, "Train R²:", train_r2)
+    
+    # If validation set is available, evaluate the model on it
+    if X_val is not None and y_val is not None:
+        y_val_pred = model.predict(X_val).flatten()
+        val_mae = mean_absolute_error(y_val, y_val_pred)
+        val_r2 = r2_score(y_val, y_val_pred)
+        print("Validation MAE:", val_mae, "Validation R²:", val_r2)
+    
+    return model
+
+# %%
+# Create Sequences
+
+def create_sequences(df, features, time_steps=3, buffer_df=None):
+    sequences = []
+    targets = []
+
+    # Combine buffer with the new data if buffer is provided
+    if buffer_df is not None:
+        df = pd.concat([buffer_df, df])
+
+    for stock_id in df['stock_id'].unique():
+        stock_data = df[df['stock_id'] == stock_id]
+
+        for date_id in stock_data['date_id'].unique():
+            date_data = stock_data[stock_data['date_id'] == date_id]
+
+            if len(date_data) >= time_steps:
+                for i in range(len(date_data) - time_steps + 1):
+                    sequence = date_data.iloc[i:i + time_steps][features].values
+                    sequences.append(sequence)
+
+                    # Ensuring the target corresponds to the last item in the sequence
+                    if 'target' in date_data.columns:
+                        target = date_data.iloc[i + time_steps - 1]['target']
+                        targets.append(target)
+            else:
+                # Handle cases where the number of data points is less than time_steps
+                # Padding the sequence with zeros or the last available data point
+                padded_sequence = np.zeros((time_steps, len(features)))
+                num_missing = time_steps - len(date_data)
+                if len(date_data) > 0:
+                    # Repeating the last available data point
+                    for i in range(num_missing):
+                        padded_sequence[i] = date_data.iloc[-1][features].values
+                for i in range(len(date_data)):
+                    padded_sequence[num_missing + i] = date_data.iloc[i][features].values
+
+                sequences.append(padded_sequence)
+
+                # Use the available target for the last data point
+                if 'target' in date_data.columns:
+                    target = date_data.iloc[-1]['target']
+                    targets.append(target)
+
+    return np.array(sequences), np.array(targets) if targets else None
+
+# %%
+# Create cross validation function
+
+def manual_cross_validation(df, features, n_splits=5, batch_size=32, patience=3, quick_check=False):
+    time_step = 3
+    total_score = 0
+
+    # Preprocess data once if applicable (e.g., feature scaling)
+    # df, features = preprocess_data(df, features) # Uncomment if applicable
+
+    # Determine the range of date_id and split it
+    date_ids = df['date_id'].unique()
+    split_size = len(date_ids) // n_splits
+
+    for i in range(n_splits):
+        # Define the split for the current fold
+        val_start = i * split_size
+        val_end = val_start + split_size if i < n_splits - 1 else len(date_ids)
+        val_date_ids = date_ids[val_start:val_end]
+
+        # Split the data
+        train_split = df[~df['date_id'].isin(val_date_ids)]
+        val_split = df[df['date_id'].isin(val_date_ids)]      
+
+        # Create sequences
+        X_train, y_train = create_sequences(train_split, features, time_steps=time_step)
+        X_val, y_val = create_sequences(val_split, features, time_steps=time_step)
+
+        # Debugging: Check the shapes of X_train and y_train
+        print("Shape of X_train:", X_train.shape)
+        print("Shape of y_train:", y_train.shape)
+        
+        if len(X_train) == 0 or len(y_train) == 0 or len(X_train) != len(y_train):
+            raise ValueError("Mismatch in the number of samples between features and labels.")
+
+        # Early stopping callback
+        early_stopping = EarlyStopping(monitor='val_loss', patience=patience, restore_best_weights=True)
+
+        # Train the model with or without quick check
+        model = train_lstm_model(X_train, y_train, X_val, y_val, batch_size=batch_size, callbacks=[early_stopping], quick_check=quick_check)
+
+        # Evaluate the model
+        y_val_pred = model.predict(X_val).flatten()
+        mae = mean_absolute_error(y_val, y_val_pred)
+        print(f"Fold {i+1}, Validation MAE: {mae}")
+        total_score += mae
+
+    average_score = total_score / n_splits
+    print(f"Average MAE over {n_splits} folds: {average_score}")
+
+# %%
+# Run the manual cross-validation 
+subset_train = train  # Adjust fraction as needed
+manual_cross_validation(subset_train, features, n_splits=2, quick_check=False)
+
+# Using a subset of the data for quick testing
+
+# manual_cross_validation(subset_train, features, n_splits=2, quick_check=True)
+
+# %%
+# After cross-validation is done, Train the final model on the entire dataset,  No validation set used
+X, y = create_sequences(subset_train, features, time_steps=3)
+model = train_lstm_model(X, y)  
+
+# Using a subset of the data for quick testing
+# subset_X, subset_y = create_sequences(subset_train, features, time_steps=3)  # Adjust fraction as needed
+# model = train_lstm_model(subset_X, subset_y, quick_check=True)
+
+# %%
+# Save the trained model
+model_filename = '/kaggle/working/LSTM_model.joblib'
+dump(model, model_filename)
+print(f"Model saved to {model_filename}")
+
+# When you need to make predictions later, you can load the model
+# model = load(model_filename)
+# predictions = model.predict(X_test)
+
+# %%
+# prediction funcion for test set
+
+# Define the buffer size and initialize an empty DataFrame for the buffer
+buffer_size = 1000  # Adjust as needed
+buffer_df = pd.DataFrame()
+
+def check_nan_in_dataframe(df, step_description, excluded_columns=None):
+    excluded_columns = excluded_columns or []
+    nan_counts = df.drop(columns=excluded_columns).isna().sum()
+    if nan_counts.any():
+        print(f"NaN values found after {step_description}:")
+        print(nan_counts[nan_counts > 0])
+
+            
+def check_nan_in_ndarray(arr, arr_name):
+    if np.isnan(arr).any():
+        print(f"NaN values found in {arr_name}")
+        print("Number of NaN values:", np.isnan(arr).sum())
+        
+
+
+
+
+def prediction(test, model, scaler, features, buffer_df):
+    # Combine the buffer with the new chunk and preprocess the data
+    combined_data = pd.concat([buffer_df, test])
+
+    # Apply feature engineering to the combined data
+    combined_feature, _ = feature_engineering(combined_data)
+#     check_nan_in_dataframe(combined_data, "feature engineering", excluded_columns=['far_price', 'near_price'])
+
+    # Apply scaling
+    combined_feature[features] = scaler.transform(combined_feature[features])
+#     check_nan_in_dataframe(combined_data, "scaling", excluded_columns=['far_price', 'near_price'])
+
+    # Create sequences from the combined data
+    X_test, _ = create_sequences(combined_feature, features, time_steps=3)
+#     check_nan_in_ndarray(X_test, "X_test sequences")
+
+    # Make predictions using the LSTM model
+    y_predict = model.predict(X_test[-len(test):], verbose=0)
+
+    # Update the buffer
+    new_buffer_df = combined_data.iloc[-buffer_size:]
+
+    return y_predict.flatten().astype('float64'), new_buffer_df, X_test
+
+
+# %%
+test = pd.read_csv('/kaggle/input/optiver-trading-at-the-close/example_test_files/test.csv')
+revealed_targets = pd.read_csv('/kaggle/input/optiver-trading-at-the-close/example_test_files/revealed_targets.csv')
+sample_prediction = pd.read_csv('/kaggle/input/optiver-trading-at-the-close/example_test_files/sample_submission.csv')
+test_y = train_original.iloc[-33000:][['time_id','stock_id','target']].reset_index(drop = True)
+
+# %%
+# # Test by our test data before submit
+# # First, sort the test data by date_id and seconds_in_bucket
+# test = test.sort_values(by=['date_id', 'seconds_in_bucket', 'stock_id'])
+# test_y = test_y.sort_values(by=['time_id', 'stock_id'])
+
+# test.reset_index(drop=True, inplace=True)
+# test_y.reset_index(drop=True, inplace=True)
+
+# # Number of rows per chunk is 200
+# rows_per_chunk = 200
+
+# # Initialize the buffer DataFrame
+# buffer_df = pd.DataFrame()
+
+# # Initialize lists to store results
+# all_predictions = []   
+
+# # Main loop for processing test data
+# for i in range(0, len(test), rows_per_chunk):
+#     test_chunk = test.iloc[i:i + rows_per_chunk]
+
+#     # Apply feature engineering and check for NaNs
+#     test_chunk, _ = feature_engineering(test_chunk)  # Assuming the function returns (DataFrame, features)
+# #     check_nan_in_dataframe(test_chunk, "feature engineering", excluded_columns=['far_price', 'near_price'])
+
+#     # Apply scaling and check for NaNs
+#     test_chunk[features] = scaler.transform(test_chunk[features])
+# #     check_nan_in_dataframe(test_chunk, "scaling", excluded_columns=['far_price', 'near_price'])
+
+#     # Apply the prediction function and check for NaNs in X_test
+#     predictions, buffer_df, X_test = prediction(test_chunk, model, scaler, features, buffer_df)
+# #     check_nan_in_ndarray(X_test, "X_test")
+
+#     all_predictions.extend(predictions)
+
+
+# # Convert lists to arrays for evaluation
+# all_predictions = np.array(all_predictions)
+
+# # Calculate MAE and R2
+# mae = mean_absolute_error(test_y['target'], all_predictions)
+# r2 = r2_score(test_y['target'], all_predictions)
+# print("MAE:", mae, "R²:", r2)
+
+# %%
+import optiver2023
+env = optiver2023.make_env()
+iter_test = env.iter_test()
+
+# %%
+# counter = 0
+
+# for (test, revealed_targets, sample_prediction) in iter_test:
+#     sample_prediction['target'] = 0
+#     env.predict(sample_prediction)
+#     predictions, buffer_df, X_test = prediction(test, model, scaler, features, buffer_df)
+#     sample_prediction['target'] = predictions
+#     print("Sample prediction NaN count:", sample_prediction.isnull().sum())
+#     print("X_test NaN count:", np.isnan(X_test).sum())
+#     counter += 1
+
+# print("Final X_test:", X_test)
+
+# %%
+counter = 0
+
+for (test, revealed_targets, sample_prediction) in iter_test:
+    
+    if test.currently_scored.iloc[0]== False:
+        sample_prediction['target'] = 0
+        env.predict(sample_prediction)
+        counter += 1
+        continue
+    
+#     print(len(test[test['currently_scored'] == True]))
+#     print(len(revealed_targets))
+#     print(revealed_targets.head(3))
+#     print(len(sample_prediction))
+
+    predictions, buffer_df, X_test = prediction(test, model, scaler, features, buffer_df)
+    sample_prediction['target'] = predictions
+#     print(sample_prediction)
+#     print(counter)
+    env.predict(sample_prediction)
+    counter += 1
+
+# %%
+# print(sample_prediction.isnull().sum())
+# print(np.isnan(X_test).sum())
+# sample_prediction.head(20)
+
+# %%
+sub = pd.read_csv('submission.csv')
+# The publicly-seen test blocks are not scored and return value of 0. 
+# The hidden test block will be run to provide the LB score
+print(sub)
+print(len(sub[sub['target'] == 0]))
+
+# %%
+# train
+
+# %%
+
