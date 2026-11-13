@@ -125,7 +125,7 @@ def run_experiment(csv_path, config, output):
     save_json(output / "manifest.json", {"data_file": Path(csv_path).name, "sha256": sha256(csv_path),
         "source_rows": len(raw), "scored_rows": len(y), "features": len(X.columns), "git_revision": revision,
         "python": platform.python_version(), "packages": {n: version(n) for n in ["numpy", "pandas", "scikit-learn", "xgboost", "joblib"]}})
-    if winner != "lstm":
+    if hasattr(model, "named_steps"):
         est = model.named_steps["model"]
         if hasattr(est, "feature_importances_"):
             names = model.named_steps["preprocess"].get_feature_names_out()

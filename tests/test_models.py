@@ -62,3 +62,26 @@ def test_lstm_sequences_and_stream_parity(panel, tmp_path):
     # Validation-day preprocessing is not used in fitting the scaler.
     assert int(model.scaler.n_samples_seen_) < train.sum()
 
+
+
+def test_chunked_ridge_matches_sklearn_ridge():
+    import numpy as np, pandas as pd
+    from sklearn.compose import ColumnTransformer
+    from sklearn.impute import SimpleImputer
+    from sklearn.linear_model import Ridge
+    from sklearn.pipeline import Pipeline
+    from sklearn.preprocessing import OneHotEncoder, StandardScaler
+    from optiver_close.models import ChunkedRidge
+    rng = np.random.default_rng(0)
+    n = 3000
+    X = pd.DataFrame({"stock_id": rng.integers(0, 7, n), "date_id": rng.integers(0, 30, n),
+                      "a": rng.normal(size=n), "b": rng.normal(5, 3, n), "c": np.ones(n)})
+    X.loc[rng.random(n) < 0.1, "a"] = np.nan
+    y = 2 * X.a.fillna(0) - X.b + X.stock_id + rng.normal(size=n)
+    ref = Pipeline([("prep", ColumnTransformer([
+        ("num", Pipeline([("imp", SimpleImputer(strategy="median")), ("sc", StandardScaler())]), ["a", "b", "c"]),
+        ("stock", OneHotEncoder(handle_unknown="ignore", sparse_output=False), ["stock_id"])])),
+        ("ridge", Ridge(alpha=10.0, solver="cholesky"))]).fit(X, y)
+    ours = ChunkedRidge(list(X.columns), alpha=10.0, chunk=700).fit(X, y)
+    test = X.assign(stock_id=X.stock_id.where(X.index % 50 != 0, 99))      # include unseen stocks
+    np.testing.assert_allclose(ours.predict(test), ref.predict(test), atol=1e-8)
