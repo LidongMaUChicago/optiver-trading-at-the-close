@@ -14,11 +14,40 @@ page displays private MAE 5.5610; the January rerun entry currently has an Error
 status. It is not a verified final-private 4.7 score. The 2026 rewrite has separate
 results and must not inherit the old score or a leaderboard rank.
 
-**Current status (November 13, 2026).** 15 unit tests pass, and the small real-data
-workflow (`configs/quick.json`) runs end to end for all four model families: it saves
-the model, reloads it, and the streaming predictor reproduces the batch holdout
-predictions to within 1e-7. The full-data research run (`configs/full.json`) is the
-next step; its measured results will be added below when it completes.
+**Current status (November 13, 2026).** 16 unit tests pass, and the full-data research
+run (`configs/full.json`, all four model families, 5.24M rows) completed in 91 minutes on a
+dedicated 15-vCPU / NVIDIA L40S instance. Measured results are below and in
+`reports/full_run/`. They are new 2026 results on a local holdout, not Kaggle leaderboard scores.
+
+### Full-run results (2026 rebuild, local evaluation)
+
+Development MAE (basis points) on three expanding folds, 20 validation days each:
+
+| Model | Fold 0 (days 400–419) | Fold 1 (420–439) | Fold 2 (440–459) | Pooled | Fit time / fold |
+|---|---|---|---|---|---|
+| Ridge | 6.458 | 5.590 | 5.970 | 6.006 | ~25 s |
+| Random Forest | 6.415 | 5.543 | 5.944 | 5.967 | ~15 min |
+| LSTM | 6.413 | 5.536 | 5.938 | 5.962 | ~10 min (GPU) |
+| **XGBoost** | **6.367** | **5.508** | **5.910** | **5.928** | ~2.7 min (GPU) |
+
+XGBoost has the lowest MAE in every fold, so it was selected by the pre-declared rule
+(lowest pooled development MAE). The ranking XGBoost < LSTM ≈ Random Forest < Ridge is
+stable across folds; the gaps are small (0.04–0.08 bp) next to the fold-to-fold swings
+(about 0.9 bp), which come from market conditions, not from the models.
+
+Terminal holdout (days 461–480, opened once after selection):
+
+| | MAE | RMSE | R² |
+|---|---|---|---|
+| XGBoost (selected) | 5.669 | 8.561 | 0.036 |
+| Predict zero | 5.790 | 8.720 | 0.000 |
+
+XGBoost beats the zero baseline by 0.12 bp (about 2.1%); the paired day-bootstrap 95%
+interval for the improvement is [0.109, 0.135] bp, and it is positive on every one of the
+20 holdout days. The most important feature by far is WAP vs mid price, followed by
+cross-sectional book imbalance and WAP vs reference price
+(`reports/full_run/feature_importance.csv`). These numbers are not comparable to the
+historical 4.7191 public score: different period, different evaluation, no leaderboard.
 
 An earlier real-data LSTM crash (SIGSEGV in `AdamW.step`) was a native-library
 conflict, not a data problem: scikit-learn, xgboost and torch each load their own
@@ -109,7 +138,7 @@ Choose a fresh output directory each time: runs cannot silently overwrite result
 
 ```bash
 optiver-research --data data/raw/train.csv --config configs/full.json \
-  --output runs/full-v1 --allow-full-run
+  --output runs/full-v3 --allow-full-run
 ```
 
 The last 20 days are a terminal holdout; a one-day gap separates them from the
@@ -131,7 +160,7 @@ import joblib
 from optiver_close.inference import StreamingPredictor
 
 # Load only your own trusted artifacts; joblib can execute code while loading.
-artifact = joblib.load('runs/full-v1/model.joblib')
+artifact = joblib.load('runs/full-v3/model.joblib')
 predictor = StreamingPredictor(artifact)
 prediction = predictor.predict(complete_current_timestamp_dataframe)
 ```
@@ -144,6 +173,7 @@ is in `scripts/kaggle_predict.py`; no submissions are made automatically.
 ## Results and limitations
 
 - `reports/verification.json`: actual short test / real-data exercise status
+- `reports/full_run/`: full-run metrics, per-fold table, manifest, diagnostics, feature importance
 - `reports/quick_metrics.json`: small-sample functional exercise only (not a benchmark)
 - `docs/HISTORICAL_RESULTS.md`: historical public vs private score provenance
 - `legacy/`: code-only exports of the original notebooks for comparison, not executable production code

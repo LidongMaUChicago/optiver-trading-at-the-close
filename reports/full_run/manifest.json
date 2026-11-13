@@ -1,0 +1,16 @@
+{
+  "data_file": "train.csv",
+  "sha256": "d7ca1efc81ed3b16764cd235486a3bcff3c0330c7e22b04325843f7356028f14",
+  "source_rows": 5237980,
+  "scored_rows": 5237892,
+  "features": 113,
+  "git_revision": "777bf88af4961eb1f9a4792f8678ca5cc3ac2c11",
+  "python": "3.12.3",
+  "packages": {
+    "numpy": "2.2.6",
+    "pandas": "2.3.3",
+    "scikit-learn": "1.7.2",
+    "xgboost": "3.0.5",
+    "joblib": "1.6.0"
+  }
+}

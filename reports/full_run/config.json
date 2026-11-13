@@ -1,0 +1,50 @@
+{
+  "run_type": "full_research",
+  "notes": "Declared before any full-data result was seen; all changes vs the Codex draft are compute-driven. threads 2 -> 14 (dedicated OVH l40s-90: 15 vCPU, 86 GB RAM, NVIDIA L40S 48 GB); random forest max_samples=0.1 (each tree bootstraps 10% of rows; full-sample trees were timed at ~10 h for four fits); XGBoost device=cuda; LSTM on GPU with batch_size 256 (was 64). Thread count does not change results.",
+  "seed": 42,
+  "threads": 14,
+  "subset": {},
+  "split": {
+    "holdout_days": 20,
+    "validation_days": 20,
+    "folds": 3,
+    "gap_days": 1,
+    "min_train_days": 60
+  },
+  "models": [
+    {
+      "name": "ridge",
+      "params": {
+        "alpha": 100
+      }
+    },
+    {
+      "name": "random_forest",
+      "params": {
+        "n_estimators": 150,
+        "max_depth": 12,
+        "max_samples": 0.1
+      }
+    },
+    {
+      "name": "xgboost",
+      "params": {
+        "n_estimators": 500,
+        "max_depth": 6,
+        "learning_rate": 0.04,
+        "device": "cuda"
+      }
+    },
+    {
+      "name": "lstm",
+      "params": {
+        "epochs": 15,
+        "hidden": 32,
+        "embedding_dim": 8,
+        "sequence_length": 12,
+        "patience": 3,
+        "batch_size": 256
+      }
+    }
+  ]
+}
