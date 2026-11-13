@@ -3,7 +3,8 @@ import os
 
 # Bound native thread pools before numpy/sklearn/xgboost/torch are imported.
 for _name, _value in {"OMP_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "2",
-                      "MKL_NUM_THREADS": "2", "VECLIB_MAXIMUM_THREADS": "1"}.items():
+                      "MKL_NUM_THREADS": "2", "VECLIB_MAXIMUM_THREADS": "1",
+                      "CUBLAS_WORKSPACE_CONFIG": ":4096:8"}.items():
     os.environ.setdefault(_name, _value)
 
 # On macOS wheels, scikit-learn, xgboost (Homebrew) and torch each ship their own
