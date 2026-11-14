@@ -1,7 +1,7 @@
 {
- "date": "2026-11-13",
+ "date": "2026-11-14",
  "unit_tests": {
-  "passed": 16,
+  "passed": 28,
   "failed": 0,
   "python": "3.11.15"
  },
@@ -62,5 +62,48 @@
   ],
   "errors": "none",
   "earlier_attempts": "full-v1 and full-v2 on a shared machine were killed by out-of-memory (sklearn Ridge; then contention with other jobs). Fixed with ChunkedRidge and a dedicated instance; no results from them were used."
+ },
+ "research_extension_study": {
+  "completed": true,
+  "protocol": "configs/study.json (declared 2026-11-13 before any study result)",
+  "scope": "local-100d: Apple M4 CPU, 100-day rolling training windows, all 200 stocks; not full-history",
+  "fits": 440,
+  "failed": 0,
+  "compute_hours": 12.51,
+  "nested_outer_mae_W3_W5": {
+   "ridge": 6.0,
+   "random_forest": 5.9568,
+   "xgboost": 5.9332,
+   "lstm": 5.9759,
+   "mlp": 5.9689
+  },
+  "repro_full_history": "ridge exact; xgboost CPU within 0.0006 bp of full-v3 GPU",
+  "final_model": "xgboost:x04_slow+centered",
+  "final_holdout_REUSED": {
+   "mae": 5.6602,
+   "zero_mae": 5.7904,
+   "block5_ci_gain": [
+    0.1188,
+    0.1424
+   ],
+   "note": "days 461-480 already evaluated by full-v3; evaluated once here; not a pristine test; no fresh external test exists"
+  },
+  "artifact": {
+   "path": "runs/study/final/model.joblib",
+   "sha256": "0cf84a4a02b24e070f1b49bba5b41120ca1f53714bbfd8d91bf2eb6a8f6ed659",
+   "in_git": false
+  },
+  "reload_max_abs_diff": 0.0,
+  "stream_vs_batch_max_abs_diff": 0.0,
+  "latency_ms_per_200_stock_timestamp": {
+   "mean": 114.9,
+   "p95": 171.6
+  },
+  "kaggle_local_api_test": {
+   "passed": true,
+   "batches": 165
+  },
+  "kaggle_notebook_run": "NOT YET DONE (waiting for browser access); no submission will be made",
+  "report": "docs/STUDY_REPORT.md"
  }
 }

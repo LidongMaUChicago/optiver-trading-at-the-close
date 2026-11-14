@@ -14,10 +14,33 @@ page displays private MAE 5.5610; the January rerun entry currently has an Error
 status. It is not a verified final-private 4.7 score. The 2026 rewrite has separate
 results and must not inherit the old score or a leaderboard rank.
 
-**Current status (November 13, 2026).** 16 unit tests pass, and the full-data research
-run (`configs/full.json`, all four model families, 5.24M rows) completed in 91 minutes on a
-dedicated 15-vCPU / NVIDIA L40S instance. Measured results are below and in
-`reports/full_run/`. They are new 2026 results on a local holdout, not Kaggle leaderboard scores.
+**Current status (November 14, 2026).** 28 unit tests pass. The full-data run (full-v3) is complete; its results are below and in `reports/full_run/`. A follow-up research study is also complete: a frozen protocol, nested walk-forward evaluation, 440 fits, ablations, embedding tests, ensembles and statistics. It is summarised in the next section and written up in `docs/STUDY_REPORT.md`. All 2026 numbers come from local evaluation, not the Kaggle leaderboard.
+
+### Research extension study (local-100d, November 2026)
+
+This study ran on an Apple M4 laptop. Each model is trained on the 100 days before its validation window. The protocol (`configs/study.json`) was frozen before any result. Configurations were chosen on earlier windows only and scored on W3–W5 (days 400–459).
+
+| Nested outer MAE (bp) | XGBoost | Random Forest | MLP | LSTM | Ridge | Zero |
+|---|---|---|---|---|---|---|
+| W3–W5 mean | **5.933** | 5.957 | 5.969 | 5.976 | 6.000 | 6.066 |
+
+- **XGBoost vs the others.** It beats zero by 0.133 bp (block-bootstrap 95% CI [0.118, 0.147]). It beats Ridge, LSTM and RF by 0.067, 0.043 and 0.024 bp. All four comparisons are significant after Holm correction, using Newey-West and block bootstrap on daily loss differences.
+- **Reproduction.** Ridge reproduces full-v3 exactly; CPU XGBoost is within 0.0006 bp of the GPU run.
+- **Negative results:**
+  - stock embeddings did not help (5 seeds, −0.0006 bp, p = 0.49);
+  - LSTM sequence length 1 was best;
+  - blends did not beat XGBoost alone.
+- **Feature groups.** Timing and lag features matter; cross-sectional features are redundant.
+- **Final model.** XGBoost plus cross-sectional centring, selected on development data. Evaluated once on the REUSED days 461–480: **MAE 5.660 vs 5.790 for zero**, better on 20/20 days. These days were already used by full-v3, so this is not a fresh test.
+- **Inference checks.** Save/reload and stream-vs-batch parity are exact, and a local Kaggle API protocol test passes.
+
+| Topic | File |
+|---|---|
+| Full write-up | `docs/STUDY_REPORT.md` |
+| Every fit | `reports/study/experiment_index.csv` |
+| All aggregates | `reports/study/results.json` |
+| Interview material | `docs/PROJECT_EXPLANATION_ZH.md`, `docs/INTERVIEW_NARRATIVE_EN.md` |
+| Proposed resume bullets | `docs/RESUME_BULLETS_PROPOSED.md` |
 
 ### Full-run results (2026 rebuild, local evaluation)
 
@@ -173,6 +196,7 @@ is in `scripts/kaggle_predict.py`; no submissions are made automatically.
 ## Results and limitations
 
 - `reports/verification.json`: actual short test / real-data exercise status
+- `docs/STUDY_REPORT.md`, `reports/study/`: research extension study (protocol, searches, ablations, identity, ensembles, statistics, final REUSED-holdout evaluation)
 - `reports/full_run/`: full-run metrics, per-fold table, manifest, diagnostics, feature importance
 - `reports/quick_metrics.json`: small-sample functional exercise only (not a benchmark)
 - `docs/HISTORICAL_RESULTS.md`: historical public vs private score provenance

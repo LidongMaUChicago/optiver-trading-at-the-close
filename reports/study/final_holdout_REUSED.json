@@ -1,0 +1,98 @@
+{
+ "status": "REUSED terminal holdout (days 461-480 were already evaluated in full-v3); evaluated once here for the frozen candidate; not a pristine test",
+ "winner": "xgboost:x04_slow+centered",
+ "specs": [
+  [
+   "xgboost",
+   {
+    "learning_rate": 0.02,
+    "n_estimators": 1200
+   }
+  ]
+ ],
+ "training_days": [
+  360,
+  459
+ ],
+ "fit_seconds": 300.0736592910034,
+ "holdout": {
+  "mae": 5.6602496222315315,
+  "rmse": 8.55013055782196,
+  "r2": 0.03813965991227142,
+  "rows": 220000
+ },
+ "zero_baseline": {
+  "mae": 5.790414357978648,
+  "rmse": 8.719632233349135,
+  "r2": -0.00037507325097330124,
+  "rows": 220000
+ },
+ "paired_vs_zero": {
+  "days": 20,
+  "mean_diff": 0.13016473574711548,
+  "share_days_b_better": 1.0,
+  "nw_se": 0.006489805805804185,
+  "nw_z": 20.056799793716802,
+  "nw_p_two_sided": 1.7605638118546387e-89,
+  "iid_day_bootstrap_95": [
+   0.11642334689337606,
+   0.14421811086779185
+  ],
+  "block_bootstrap_95": {
+   "2": [
+    0.11877258062135851,
+    0.14368024946268265
+   ],
+   "5": [
+    0.11878701527147652,
+    0.14241267863081872
+   ],
+   "10": [
+    0.12486682682186508,
+    0.1430978565417221
+   ]
+  }
+ },
+ "full_v3_reference": {
+  "model": "xgboost full history (GPU)",
+  "holdout_mae": 5.6687,
+  "zero_mae": 5.7904
+ },
+ "artifact": {
+  "path": "runs/study/final/model.joblib",
+  "sha256": "0cf84a4a02b24e070f1b49bba5b41120ca1f53714bbfd8d91bf2eb6a8f6ed659",
+  "bytes": 5494643
+ },
+ "reload_max_abs_diff": 0.0,
+ "stream_vs_batch": {
+  "days": [
+   461,
+   462
+  ],
+  "rows": 22000,
+  "max_abs_diff": 0.0,
+  "timestamps": 110
+ },
+ "latency_ms_per_timestamp_batch": {
+  "mean": 114.85865228136059,
+  "p95": 171.6415107457578,
+  "max": 1098.5241659946041,
+  "stocks_per_batch": 200,
+  "note": "includes feature engineering on the current day's history; Kaggle limits are per full test run"
+ },
+ "peak_rss_gb": 2.5316925048828125,
+ "kaggle_local_api": {
+  "batches": 165,
+  "rows": 33000,
+  "unique_row_ids": 33000,
+  "row_ids_match_sample": true,
+  "finite": true,
+  "seconds": 16.81386579199898,
+  "scored_rows": 0,
+  "note": "local re-implementation of the API protocol on Kaggle's example files; the real Kaggle notebook run was not performed"
+ },
+ "host": {
+  "machine": "arm64",
+  "python": "3.11.15"
+ }
+}

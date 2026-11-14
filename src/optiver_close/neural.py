@@ -1,4 +1,4 @@
-"""CPU LSTM with jointly learned stock embeddings and causal padded sequences."""
+"""LSTM / MLP with optional stock identity (embedding, one-hot or none) on causal windows."""
 from __future__ import annotations
 import random
 import numpy as np
@@ -44,35 +44,69 @@ class Sequences:
 
 
 class Network(nn.Module):
-    def __init__(self, features, stocks, hidden, embedding_dim):
+    """LSTM (or per-row MLP) over causal windows, with an optional stock identity.
+
+    identity="embedding": learned embedding joined to the final hidden state
+    identity="onehot_input": one-hot stock vector appended to every input step
+    identity="none": no stock information at all
+    Unknown stocks map to index 0: a zero embedding / all-zero one-hot vector.
+    """
+    def __init__(self, features, stocks, hidden, embedding_dim, identity="embedding",
+                 arch="lstm", dropout=0.0):
         super().__init__()
-        # Explicit cell unrolling avoids platform-specific fused RNN failures on
-        # some macOS CPU builds while implementing the same LSTM recurrence.
-        self.cell = nn.LSTMCell(features, hidden)
-        self.hidden = hidden
-        self.embedding = nn.Embedding(stocks + 1, embedding_dim, padding_idx=0)
-        self.head = nn.Sequential(nn.Linear(hidden + embedding_dim, hidden), nn.ReLU(), nn.Linear(hidden, 1))
+        self.identity, self.arch, self.hidden, self.stocks = identity, arch, hidden, stocks
+        step_in = features + (stocks if identity == "onehot_input" else 0)
+        side = embedding_dim if identity == "embedding" else 0
+        if arch == "lstm":
+            # Explicit cell unrolling avoids platform-specific fused RNN failures on
+            # some macOS CPU builds while implementing the same LSTM recurrence.
+            self.cell = nn.LSTMCell(step_in, hidden)
+        elif arch == "mlp":
+            self.body = nn.Sequential(nn.Linear(step_in, hidden), nn.ReLU())
+        else:
+            raise ValueError(f"Unknown arch: {arch}")
+        if identity == "embedding":
+            self.embedding = nn.Embedding(stocks + 1, embedding_dim, padding_idx=0)
+        elif identity not in ("none", "onehot_input"):
+            raise ValueError(f"Unknown identity mode: {identity}")
+        self.drop = nn.Dropout(dropout)
+        self.head = nn.Sequential(nn.Linear(hidden + side, hidden), nn.ReLU(), nn.Linear(hidden, 1))
 
     def forward(self, x, stock):
-        h = x.new_zeros((len(x), self.hidden))
-        c = x.new_zeros((len(x), self.hidden))
-        for current in x.unbind(dim=1):
-            h, c = self.cell(current, (h, c))
-        return self.head(torch.cat([h, self.embedding(stock)], dim=1)).squeeze(1)
+        if self.identity == "onehot_input":
+            onehot = nn.functional.one_hot(stock, self.stocks + 1)[:, 1:].to(x.dtype)
+            x = torch.cat([x, onehot[:, None, :].expand(-1, x.shape[1], -1)], dim=2)
+        if self.arch == "mlp":
+            h = self.body(x[:, -1])
+        else:
+            h = x.new_zeros((len(x), self.hidden))
+            c = x.new_zeros((len(x), self.hidden))
+            for current in x.unbind(dim=1):
+                h, c = self.cell(current, (h, c))
+        h = self.drop(h)
+        if self.identity == "embedding":
+            h = torch.cat([h, self.embedding(stock)], dim=1)
+        return self.head(h).squeeze(1)
 
 
 class LSTMRegressor:
     def __init__(self, sequence_length=12, hidden=32, embedding_dim=8, epochs=15,
-                 batch_size=64, learning_rate=0.001, patience=3, seed=42, threads=2, device="auto"):
+                 batch_size=64, learning_rate=0.001, patience=3, seed=42, threads=2, device="auto",
+                 identity="embedding", arch="lstm", dropout=0.0, weight_decay=1e-4, clip_norm=1.0,
+                 inner_fraction=0.15):
         self.sequence_length, self.hidden, self.embedding_dim = sequence_length, hidden, embedding_dim
         self.epochs, self.batch_size, self.learning_rate = epochs, batch_size, learning_rate
         self.patience, self.seed, self.threads = patience, seed, threads
-        self.device = device
+        self.device, self.identity, self.arch, self.dropout = device, identity, arch, dropout
+        self.weight_decay, self.clip_norm, self.inner_fraction = weight_decay, clip_norm, inner_fraction
+        if arch == "mlp":
+            self.sequence_length = 1   # per-row model: current observation only
 
     def _device(self):
-        if self.device == "auto":
+        device = getattr(self, "device", "auto")
+        if device == "auto":
             return torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        return torch.device(self.device)
+        return torch.device(device)
 
     def fit(self, X, y):
         random.seed(self.seed); np.random.seed(self.seed); torch.manual_seed(self.seed)
@@ -83,7 +117,7 @@ class LSTMRegressor:
         days = np.sort(X.date_id.unique())
         if len(days) < 3:
             raise ValueError("LSTM requires at least three training days for internal early stopping")
-        inner = max(1, int(len(days) * 0.15))
+        inner = max(1, int(len(days) * getattr(self, "inner_fraction", 0.15)))
         train_mask, val_mask = X.date_id.isin(days[:-inner]), X.date_id.isin(days[-inner:])
         self.columns = [c for c in X if c not in ("stock_id", "date_id")]
         self.imputer = SimpleImputer(strategy="median", keep_empty_features=True)
@@ -99,8 +133,10 @@ class LSTMRegressor:
         train = Sequences(X.loc[train_mask], tr, self.stock_map, self.sequence_length, y[train_mask])
         valid = Sequences(X.loc[val_mask], va, self.stock_map, self.sequence_length, y[val_mask])
         dev = self._device()
-        self.network = Network(len(self.columns), len(self.stock_map), self.hidden, self.embedding_dim).to(dev)
-        opt = torch.optim.AdamW(self.network.parameters(), lr=self.learning_rate, weight_decay=1e-4)
+        self.network = Network(len(self.columns), len(self.stock_map), self.hidden, self.embedding_dim,
+                               self.identity, self.arch, self.dropout).to(dev)
+        opt = torch.optim.AdamW(self.network.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay)
+        self.nonfinite_steps = 0
         loss_fn = nn.L1Loss()
         rng = np.random.default_rng(self.seed)
         best, stale, weights = float("inf"), 0, None
@@ -109,12 +145,19 @@ class LSTMRegressor:
             self.network.train()
             for x, s, target in train.batches(self.batch_size, dev, rng):
                 opt.zero_grad(); loss = loss_fn(self.network(x, s), target)
-                loss.backward(); nn.utils.clip_grad_norm_(self.network.parameters(), 1.0); opt.step()
+                loss.backward()
+                norm = nn.utils.clip_grad_norm_(self.network.parameters(), self.clip_norm)
+                if not torch.isfinite(loss) or not torch.isfinite(norm):
+                    self.nonfinite_steps += 1   # skip the update; counted and reported
+                    continue
+                opt.step()
             self.network.eval(); absolute, count = 0.0, 0
             with torch.no_grad():
                 for x, s, target in valid.batches(self.batch_size, dev):
                     absolute += (self.network(x, s) - target).abs().sum().item(); count += len(target)
             score = absolute / count
+            if not np.isfinite(score):
+                raise FloatingPointError("Non-finite LSTM validation loss")
             self.history.append({"epoch": epoch + 1, "inner_validation_mae": score})
             if score < best:
                 best, stale = score, 0

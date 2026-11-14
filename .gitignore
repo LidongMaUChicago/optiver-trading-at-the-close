@@ -16,3 +16,5 @@ kaggle.json
 *.zip
 
 CLAUDE_HANDOFF.md
+CODEX_HANDOFF.md
+data/cache/

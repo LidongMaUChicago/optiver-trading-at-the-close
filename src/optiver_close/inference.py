@@ -16,7 +16,7 @@ class StreamingPredictor:
         cols = self.artifact["feature_columns"]
         model = self.artifact["model"]
         # Neural sequences need complete current-day history; tabular models do not.
-        if self.artifact["name"] == "lstm":
+        if self.artifact.get("needs_history", self.artifact["name"] == "lstm"):
             values = model.predict(history[cols])[positions]
         else:
             values = model.predict(current[cols])

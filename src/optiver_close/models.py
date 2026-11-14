@@ -1,5 +1,6 @@
 """Four model families from the original work, with fold-local preprocessing."""
 import numpy as np
+import pandas as pd
 from sklearn.compose import ColumnTransformer
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.impute import SimpleImputer
@@ -55,9 +56,100 @@ class ChunkedRidge:
                                for i in range(0, len(X), self.chunk)])
 
 
+class MedianBaseline:
+    """Training-only median of the target: global, or per stock with a global fallback."""
+    def __init__(self, by_stock=False):
+        self.by_stock = by_stock
+
+    def fit(self, X, y):
+        y = np.asarray(y, dtype=np.float64)
+        self.global_ = float(np.median(y))
+        if self.by_stock:
+            self.stock_ = pd.Series(y).groupby(X.stock_id.to_numpy()).median()
+        return self
+
+    def predict(self, X):
+        if not self.by_stock:
+            return np.full(len(X), self.global_)
+        return X.stock_id.map(self.stock_).fillna(self.global_).to_numpy(dtype=np.float64)
+
+
+class ZeroBaseline:
+    def fit(self, X, y):
+        return self
+
+    def predict(self, X):
+        return np.zeros(len(X))
+
+
+class EarlyStoppedXGB:
+    """XGBoost whose tree count is chosen on the LAST training days only.
+
+    The final `inner_fraction` of the fitting dates is an internal validation set;
+    the model is fitted on the earlier dates. Outer/holdout rows are never seen.
+    """
+    def __init__(self, columns, params, inner_fraction=0.15, rounds=100):
+        self.numeric = [c for c in columns if c not in ("stock_id", "date_id")]
+        self.params, self.inner_fraction, self.rounds = params, inner_fraction, rounds
+
+    def fit(self, X, y):
+        y = np.asarray(y, dtype=np.float64)
+        days = np.sort(X.date_id.unique())
+        inner = days[-max(1, int(len(days) * self.inner_fraction)):]
+        val = X.date_id.isin(inner).to_numpy()
+        self.median_ = X.loc[~val, self.numeric].median().fillna(0.0)
+        fill = lambda part: part[self.numeric].fillna(self.median_)
+        self.model = XGBRegressor(early_stopping_rounds=self.rounds, **self.params)
+        self.model.fit(fill(X.loc[~val]), y[~val], eval_set=[(fill(X.loc[val]), y[val])], verbose=False)
+        self.best_iteration_ = int(self.model.best_iteration)
+        return self
+
+    def predict(self, X):
+        return self.model.predict(X[self.numeric].fillna(self.median_))
+
+
+class Blend:
+    """Equal-weight average of fitted member models (weights fixed in advance)."""
+    def __init__(self, members, weights=None):
+        self.members = members
+        self.weights = np.full(len(members), 1 / len(members)) if weights is None else np.asarray(weights)
+
+    def fit(self, X, y):
+        for m in self.members:
+            m.fit(X, y)
+        return self
+
+    def predict(self, X):
+        return sum(w * np.asarray(m.predict(X), dtype=np.float64) for w, m in zip(self.weights, self.members))
+
+
+class CrossSectionCentered:
+    """Subtract each timestamp's cross-sectional mean prediction (no fitted parameters).
+
+    Requires complete timestamp batches, as in Kaggle's API and the batch evaluation.
+    """
+    def __init__(self, model):
+        self.model = model
+
+    def fit(self, X, y):
+        self.model.fit(X, y)
+        return self
+
+    def predict(self, X):
+        p = np.asarray(self.model.predict(X), dtype=np.float64)
+        key = X.date_id.to_numpy().astype(np.int64) * 1000 + X.seconds_in_bucket.to_numpy().astype(np.int64)
+        return p - pd.Series(p).groupby(key).transform("mean").to_numpy()
+
+
 def build_model(name, columns, params=None, seed=42, threads=2):
     p = dict(params or {})
-    if name == "lstm":
+    if name == "zero":
+        return ZeroBaseline()
+    if name in ("global_median", "stock_median"):
+        return MedianBaseline(by_stock=name == "stock_median")
+    if name in ("lstm", "mlp"):
+        if name == "mlp":
+            p["arch"] = "mlp"
         from .neural import LSTMRegressor
         return LSTMRegressor(seed=seed, threads=threads, **p)
     if name == "ridge":
@@ -78,7 +170,10 @@ def build_model(name, columns, params=None, seed=42, threads=2):
                         reg_lambda=10, reg_alpha=0.1, tree_method="hist",
                         objective="reg:absoluteerror", eval_metric="mae",
                         n_jobs=threads, random_state=seed)
+        early = p.pop("early_stopping_rounds", None)
         defaults.update(p)
+        if early:
+            return EarlyStoppedXGB(columns, defaults, rounds=early)
         estimator = XGBRegressor(**defaults)
     else:
         raise ValueError(f"Unknown model: {name}")
