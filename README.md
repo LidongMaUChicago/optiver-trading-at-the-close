@@ -14,7 +14,7 @@ page displays private MAE 5.5610; the January rerun entry currently has an Error
 status. It is not a verified final-private 4.7 score. The 2026 rewrite has separate
 results and must not inherit the old score or a leaderboard rank.
 
-**Current status (November 14, 2026).** 28 unit tests pass. The full-data run (full-v3) is complete; its results are below and in `reports/full_run/`. A follow-up research study is also complete: a frozen protocol, nested walk-forward evaluation, 440 fits, ablations, embedding tests, ensembles and statistics. It is summarised in the next section and written up in `docs/STUDY_REPORT.md`. All 2026 numbers come from local evaluation, not the Kaggle leaderboard.
+**Current status (November 14, 2026).** 29 unit tests pass. The full-data run (full-v3) is complete; its results are below and in `reports/full_run/`. A follow-up research study is also complete: a frozen protocol, nested walk-forward evaluation, 440 fits, ablations, embedding tests, ensembles and statistics. It is summarised in the next section and written up in `docs/STUDY_REPORT.md`. All 2026 numbers come from local evaluation, not the Kaggle leaderboard.
 
 ### Research extension study (local-100d, November 2026)
 
@@ -32,7 +32,7 @@ This study ran on an Apple M4 laptop. Each model is trained on the 100 days befo
   - blends did not beat XGBoost alone.
 - **Feature groups.** Timing and lag features matter; cross-sectional features are redundant.
 - **Final model.** XGBoost plus cross-sectional centring, selected on development data. Evaluated once on the REUSED days 461–480: **MAE 5.660 vs 5.790 for zero**, better on 20/20 days. These days were already used by full-v3, so this is not a fresh test.
-- **Inference checks.** Save/reload and stream-vs-batch parity are exact, and a local Kaggle API protocol test passes.
+- **Inference checks.** Save/reload and stream-vs-batch parity are exact, and a local Kaggle API protocol test passes. A private Kaggle notebook (no submission) ran the frozen model on Kaggle's current image (Python 3.13) and matched the Mac predictions exactly (`reports/verification.json`).
 
 | Topic | File |
 |---|---|

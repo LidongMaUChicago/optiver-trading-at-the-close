@@ -1,7 +1,7 @@
 {
  "date": "2026-11-14",
  "unit_tests": {
-  "passed": 28,
+  "passed": 29,
   "failed": 0,
   "python": "3.11.15"
  },
@@ -103,7 +103,33 @@
    "passed": true,
    "batches": 165
   },
-  "kaggle_notebook_run": "NOT YET DONE (waiting for browser access); no submission will be made",
+  "kaggle_notebook_run": {
+   "done": "2026-11-14",
+   "notebook": "https://www.kaggle.com/code/lidongmausa/notebook6a568c6b36 (private, Version 1 \"Runtime check, no submission\")",
+   "dataset": "lidongmausa/optiver-close-frozen-model (private): package code, model.joblib, portable booster.json + medians, Mac reference predictions, MANIFEST sha256",
+   "runtime": {
+    "python": "3.13.18",
+    "numpy": "2.1.3",
+    "pandas": "2.3.3",
+    "sklearn": "1.6.1",
+    "xgboost": "3.4.1",
+    "environment": "Latest Container Image, CPU"
+   },
+   "official_optiver2023_api": "NOT usable on the current Kaggle image: the competition ships competition.cpython-310-x86_64-linux-gnu.so (Python 3.10 only); import fails with ModuleNotFoundError",
+   "api_used": "same iter_test/predict protocol re-implemented in the notebook over the competition example_test_files",
+   "result": {
+    "batches": 165,
+    "rows": 33000,
+    "unique_row_ids": 33000,
+    "finite": true,
+    "row_ids_match_mac": true,
+    "portable_vs_mac_max_abs_diff": 1.78e-15,
+    "joblib_vs_portable_max_abs_diff": 0.0,
+    "seconds": 40.4,
+    "joblib_load": "ok (sklearn 1.7.2->1.6.1 and xgboost pickle version warnings; predictions identical)"
+   },
+   "submission": "none"
+  },
   "report": "docs/STUDY_REPORT.md"
  }
 }

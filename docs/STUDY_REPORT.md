@@ -284,11 +284,15 @@ Holm correction covers the declared confirmatory family; everything else is expl
   - row_ids match `sample_submission` exactly;
   - all predictions finite;
   - `predict` called exactly once per batch.
-- **The notebook run on Kaggle itself has not been done yet** (see `CODEX_HANDOFF.md`).
+- **Kaggle notebook run** (private notebook, private dataset, no submission; `scripts/kaggle_runtime_check.ipynb`). The Kaggle image is Python 3.13, numpy 2.1.3, sklearn 1.6.1 and xgboost 3.4.1.
+  - The model loads in two ways: the joblib pickle (with version warnings) and a version-portable export (`src/optiver_close/portable.py`: XGBoost JSON plus training medians).
+  - Both give identical predictions. They also match the Mac predictions within 2e-15.
+  - Row IDs match exactly, all predictions are finite, and the run took 40 s for 165 batches.
+  - **Limitation:** the competition's own `optiver2023` module ships only a Python 3.10 binary and cannot be imported on today's image. The notebook therefore runs the same `iter_test`/`predict` protocol, re-implemented, over the competition's `example_test_files`.
 
 ## 11. Tests and audit
 
-`pytest`: 28 passed. The tests include:
+`pytest`: 29 passed (including portable-export parity). The tests include:
 - `tests/test_study.py`: group partition, split gaps, holdout exclusion, timing ablation, stock-median fallback, early stopping inside the fitting period, LSTM identity modes with unseen ids, MLP, stats helpers, cache guard and centring;
 - earlier tests: OpenMP import order, chunked-Ridge exactness, future/target cannot change past features, no cross-stock or cross-day leakage, missing stocks, duplicate or out-of-order batches rejected, zero depth treated as missing, purge gaps, Kaggle row alignment, and save/stream parity.
 

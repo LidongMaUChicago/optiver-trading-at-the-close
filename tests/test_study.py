@@ -102,3 +102,14 @@ def test_cross_section_centering_per_timestamp(panel):
     m = CrossSectionCentered(build_model("ridge", f.columns)).fit(f, panel.target)
     out = pd.Series(m.predict(f)).groupby([f.date_id.to_numpy(), f.seconds_in_bucket.to_numpy()]).sum()
     np.testing.assert_allclose(out, 0, atol=1e-9)
+
+
+def test_portable_export_matches_pipeline(panel, tmp_path):
+    from optiver_close.models import CrossSectionCentered
+    from optiver_close.portable import export, PortableModel
+    f = make_features(panel)
+    m = CrossSectionCentered(build_model("xgboost", f.columns, {"n_estimators": 20, "max_depth": 3})).fit(f, panel.target)
+    art = {"model": m, "name": "xgboost+centered", "feature_columns": list(f.columns), "feature_version": 1,
+           "training_days": [0, 9]}
+    export(art, tmp_path)
+    np.testing.assert_allclose(PortableModel(tmp_path).predict(f), m.predict(f), atol=1e-6)
